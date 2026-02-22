@@ -38,7 +38,7 @@ Quantum differs from DEFLATE in that:
 ## 4. Window Configuration
 Quantum supports window sizes:
 ```
-2^10 (1 KiB)  through  2^21 (2 MiB)
+    2^10 (1 KiB)  through  2^21 (2 MiB)
 ```
 The window acts as a circular buffer.
 Match offsets always reference previously decoded bytes within the window.
@@ -46,171 +46,115 @@ Match offsets always reference previously decoded bytes within the window.
 ## 5. Arithmetic Coding
 Quantum uses a 16-bit adaptive range coder.
 
-All arithmetic decoding operations MUST be bit-exact. Any deviation
-will cause irreversible stream divergence.
+All arithmetic decoding MUST be bit-exact. Any deviation will cause
+irreversible stream divergence.
 
 ### 5.1 Decoder State
-The decoder maintains three 16-bit unsigned integers:
-\[
-L \quad \text{(low bound)}
-\]
+The decoder maintains three unsigned 16-bit integers:
+- `L` — lower bound  
+- `H` — upper bound  
+- `C` — current code value  
 
-\[
-H \quad \text{(high bound)}
-\]
-
-\[
-C \quad \text{(current code value)}
-\]
-
-The invariant maintained at all times is:
-
-\[
-L \le C \le H
-\]
-
+The invariant at all times is:
+```
+    L <= C <= H
+```
 The active range is:
-\[
-R = H - L + 1
-\]
-
+```
+    R = H - L + 1
+```
 ### 5.2 Frame Initialization
 At the beginning of each frame:
-\[
-L = 0
-\]
-\[
-H = 2^{16} - 1 = 65535
-\]
-
-Then the next 16 bits from the input stream are read into:
-\[
-C
-\]
-
+```
+    L = 0
+    H = 0xFFFF
+    C = next 16 bits from input stream
+```
 ### 5.3 Symbol Decoding
 Let:
-\[
-T = \text{model.syms}[0].\text{cumfreq}
-\]
-
-be the total cumulative frequency.
-
-The decoder computes:
-
-\[
-R = H - L + 1
-\]
-
-\[
-S = \left\lfloor \frac{(C - L + 1)\cdot T - 1}{R} \right\rfloor
-\]
-
-The symbol index \( i \) is the smallest index such that:
-\[
-\text{syms}[i].\text{cumfreq} \le S
-\]
-
-The decoded symbol is:
-\[
-\text{syms}[i-1].\text{sym}
-\]
-
+```
+    T = model.syms[0].cumfreq   // total cumulative frequency
+```
+Compute:
+```
+    R = H - L + 1
+    S = floor(((C - L + 1) * T - 1) / R)
+```
+Find smallest index i such that:
+```
+    syms[i].cumfreq <= S
+```
+Decoded symbol:
+```
+    syms[i-1].sym
+```
 ### 5.4 Interval Update
 Let:
-\[
-F_{high} = \text{syms}[i-1].\text{cumfreq}
-\]
-
-\[
-F_{low} = \text{syms}[i].\text{cumfreq}
-\]
-
-The interval is updated as:
-
-\[
-H = L + \left\lfloor \frac{F_{high} \cdot R}{T} \right\rfloor - 1
-\]
-
-\[
-L = L + \left\lfloor \frac{F_{low} \cdot R}{T} \right\rfloor
-\]
-
-The invariant \( L \le C \le H \) MUST still hold.
+```
+    F_high = syms[i-1].cumfreq
+    F_low  = syms[i].cumfreq
+```
+Update bounds:
+```
+    H = L + floor((F_high * R) / T) - 1
+    L = L + floor((F_low  * R) / T)
+```
+The invariant `L <= C <= H` MUST still hold.
 
 ### 5.5 Renormalization
-After updating \( L \) and \( H \), the decoder MUST renormalize.
+After updating L and H, renormalization is required.
 
-Renormalization continues while either condition holds:
-
+Repeat while either condition holds:
 #### Case 1 — MSB Match
-\[
-\text{MSB}(L) = \text{MSB}(H)
-\]
-
-In this case:
-
-\[
-L \leftarrow 2L
-\]
-\[
-H \leftarrow 2H + 1
-\]
-\[
-C \leftarrow 2C + \text{next input bit}
-\]
-
+If:
+```
+    (L & 0x8000) == (H & 0x8000)
+```
+Then:
+```
+    L <<= 1
+    H = (H << 1) | 1
+    C = (C << 1) | next_input_bit
+```
 #### Case 2 — Underflow (E3 Condition)
 
-\[
-L \in [0x4000, 0x7FFF]
-\quad \text{and} \quad
-H \in [0x8000, 0xBFFF]
-\]
-
-In this case:
-
-\[
-C \leftarrow C \oplus 0x4000
-\]
-\[
-L \leftarrow (L \,\&\, 0x3FFF)
-\]
-\[
-H \leftarrow (H \,|\, 0x4000)
-\]
-
-Then shift left as in Case 1.
+If:
+```
+    (L & 0x4000) != 0  AND  (H & 0x4000) == 0
+```
+Then:
+```
+    C ^= 0x4000
+    L &= 0x3FFF
+    H |= 0x4000
+```
+Then perform the same left shift as Case 1.
 
 ### 5.6 Model Update
-After decoding a symbol:
-- Its cumulative frequency is incremented.
-- All higher entries are incremented accordingly.
-- When total frequency exceeds threshold (3800),
-  rescaling MUST occur.
+After each decoded symbol:
+- Increment cumulative frequencies.
+- If total cumulative frequency exceeds 3800:
+  - Convert cumulative to individual frequencies.
+  - Add 1 to each frequency.
+  - Divide each by 2.
+  - Re-sort in descending frequency order.
+  - Rebuild cumulative frequencies.
 
-Rescaling MUST preserve:
+Monotonicity MUST be preserved:
+```
+    syms[i].cumfreq > syms[i+1].cumfreq
+```
+### 5.7 Determinism Requirements
 
-\[
-\text{syms}[i].\text{cumfreq} >
-\text{syms}[i+1].\text{cumfreq}
-\]
+Implementations MUST:
 
-Stable ordering is REQUIRED.
+- Use integer arithmetic only
+- Use floor division
+- Preserve exact update order
+- Apply renormalization exactly as specified
 
-### 5.7 Determinism Requirement
-Arithmetic decoding MUST:
-- Use integer arithmetic only.
-- Use floor division.
-- Use 16-bit wrap semantics where applicable.
-- Perform renormalization exactly as specified.
-
-Any change in:
-- Division rounding
-- Shift order
-- Underflow handling
-
-will produce a different bitstream interpretation.
+Changing division rounding, update order, or bit shifts will produce
+a different decoded stream.
 
 ## 6. Selector Model (Model7)
 Selector values:
@@ -252,16 +196,15 @@ Decoding steps:
 2. Read `extra_bits[sym]` additional bits
 3. Compute:
 ```
-match_offset = position_base[sym] + extra + 1 match_length = 3
+    match_offset = position_base[sym] + extra + 1 match_length = 3
 ```
 #### 8.1.2 Selector 5 — 4-Byte Match
-
 Decoding steps:
 1. Decode `sym` from `model5`
 2. Read `extra_bits[sym]` additional bits
 3. Compute:
 ```
-match_offset = position_base[sym] + extra + 1 match_length = 4
+    match_offset = position_base[sym] + extra + 1 match_length = 4
 ```
 #### 8.1.3 Position Slot Mechanism
 Both selectors use the position slot system defined by:
@@ -269,9 +212,9 @@ Both selectors use the position slot system defined by:
 - `extra_bits[42]`
 
 The offset calculation is:
-
-match_offset = position_base[sym] + extra + 1
-
+```
+    match_offset = position_base[sym] + extra + 1
+```
 This encoding reduces entropy cost by grouping offsets into ranges of exponentially increasing size.
 
 #### 8.1.4 Model Size Constraints
@@ -281,7 +224,7 @@ The number of entries in:
 
 depends on:
 ```
-min(window_bits × 2, limit)
+    min(window_bits × 2, limit)
 ```
 Where:
 - `limit = 24` for Model4
@@ -354,7 +297,7 @@ After length is determined:
 2. Read `extra_bits[sym]`
 3. Compute:
 ```
-match_offset = position_base[sym] + extra + 1
+    match_offset = position_base[sym] + extra + 1
 ```
 #### 8.2.4 Constraints
 
@@ -371,7 +314,7 @@ This design is conceptually similar to LZ77 with length/offset coding, but diffe
 ### 9.1 Standard (Non-Wrapping) Match Copy
 A match is considered non-wrapping if:
 ```
-window_posn + match_length ≤ window_size
+    window_posn + match_length ≤ window_size
 ```
 In this case, all destination bytes fall within the current window region.
 
@@ -379,30 +322,30 @@ In this case, all destination bytes fall within the current window region.
 
 If:
 ```
-match_offset ≤ window_posn
+    match_offset ≤ window_posn
 ```
 then the match source is:
 ```
-src_index = window_posn - match_offset
+    src_index = window_posn - match_offset
 ```
 The decoder SHALL copy `match_length` bytes from:
 ```
-window[src_index ... src_index + match_length - 1]
+    window[src_index ... src_index + match_length - 1]
 ```
 into:
 ```
-window[window_posn ... window_posn + match_length - 1]
+    window[window_posn ... window_posn + match_length - 1]
 ```
 #### 9.1.2 Overlapping Copy Semantics
 If:
 ```
-match_offset < match_length
+    match_offset < match_length
 ```
 the source and destination regions overlap.
 
 Implementations MUST perform copy semantics equivalent to:
 ```
-memmove()
+    memmove()
 ```
 That is:
 - Copy forward
@@ -413,18 +356,18 @@ This behavior is REQUIRED for correct LZ-style expansion.
 ### 9.2 Offset-Wrapping Source Copy
 If:
 ```
-match_offset > window_posn
+    match_offset > window_posn
 ```
 the match source precedes the logical beginning of the window and wraps around.
 
 #### 9.2.1 Wrapped Source Index
 The effective source index SHALL be computed as:
 ```
-src_index = (window_size + window_posn - match_offset)
+    src_index = (window_size + window_posn - match_offset)
 ```
 This is equivalent to:
 ```
-src_index = (window_posn - match_offset) mod window_size
+    src_index = (window_posn - match_offset) mod window_size
 ```
 #### 9.2.2 Copy Procedure
 The decoder SHALL:
@@ -476,22 +419,22 @@ The array includes one extra entry at index `entries` whose `cumfreq` MUST be `0
 
 Cumulative frequencies MUST satisfy:
 ```
-syms[i].cumfreq > syms[i+1].cumfreq
+    syms[i].cumfreq > syms[i+1].cumfreq
 ```
 for all valid `i`.
 
 ### 11.2 Initial Symbol Assignment
 For a model initialized with:
 ```
-start len
+    start len
 ```
 symbols SHALL be assigned:
 ```
-syms[i].sym = start + i
+    syms[i].sym = start + i
 ```
 for:
 ```
-i = 0 .. len
+    i = 0 .. len
 ```
 ### 11.3 Initial Frequency Distribution
 Initial cumulative frequencies SHALL be set as:
@@ -504,7 +447,7 @@ This produces a uniform distribution where:
 
 The final entry:
 ```
-syms[len].cumfreq = 0
+    syms[len].cumfreq = 0
 ```
 ### 11.4 Model Sizes
 The following models MUST be initialized:
@@ -523,16 +466,16 @@ The following models MUST be initialized:
 
 Where:
 ```
-N = window_bits × 2
+    N = window_bits * 2
 ```
 ### 11.5 Shift and Rescale Parameters
 Each model SHALL initialize:
 ```
-shiftsleft = 4
+    shiftsleft = 4
 ```
 Rescaling SHALL occur when:
 ```
-syms[0].cumfreq > 3800
+    syms[0].cumfreq > 3800
 ```
 Rescaling MUST:
 1. Convert cumulative frequencies into individual frequencies.

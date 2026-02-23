@@ -156,6 +156,20 @@ Implementations MUST:
 Changing division rounding, update order, or bit shifts will produce
 a different decoded stream.
 
+### 5.8 Mandatory Decode Order
+For each decoded symbol, implementations MUST perform steps in
+the following exact order:
+
+1. Compute scaled value S.
+2. Select symbol index i.
+3. Update interval bounds L and H.
+4. Perform renormalization until stable.
+5. Update model frequencies.
+6. If total frequency exceeds rescale threshold, perform rescale.
+
+Reordering these steps produces a different decoded stream and is
+not permitted.
+
 ## 6. Selector Model (Model7)
 Selector values:
 | Value | Meaning |
@@ -180,135 +194,126 @@ Literal decoding:
 Each model represents a byte context partition.
 
 ## 8. Match Encoding
-Matches consist of:
-- Offset
-- Length
 
-### 8.1 Fixed-Length Match Encoding (Selectors 4 and 5)
-Selectors `4` and `5` encode fixed-length matches.
+Matches represent back-references into previously decoded output
+within the current frame.
 
-These selectors differ only in match length.  
-Offset decoding is identical for both.
+A match consists of:
 
-#### 8.1.1 Selector 4 — 3-Byte Match
-Decoding steps:
-1. Decode `sym` from `model4`
-2. Read `extra_bits[sym]` additional bits
-3. Compute:
-```
-    match_offset = position_base[sym] + extra + 1 match_length = 3
-```
-#### 8.1.2 Selector 5 — 4-Byte Match
-Decoding steps:
-1. Decode `sym` from `model5`
-2. Read `extra_bits[sym]` additional bits
-3. Compute:
-```
-    match_offset = position_base[sym] + extra + 1 match_length = 4
-```
-#### 8.1.3 Position Slot Mechanism
-Both selectors use the position slot system defined by:
+- `match_offset`
+- `match_length`
+
+Offsets are encoded using a position slot mechanism.
+
+### 8.1 Position Slot Tables
+
+All match offsets use the following tables:
+
 - `position_base[42]`
 - `extra_bits[42]`
 
-The offset calculation is:
+These tables SHALL be generated exactly as follows:
 ```
-    match_offset = position_base[sym] + extra + 1
+    unsigned int i, offset = 0;
+    for (i = 0; i < 42; i++)
+    { 
+        position_base[i] = offset; 
+        extra_bits[i] = ((i < 2) ? 0 : (i - 2)) >> 1; 
+        offset += 1U << extra_bits[i]; 
+    }
 ```
-This encoding reduces entropy cost by grouping offsets into ranges of exponentially increasing size.
+For a decoded slot index `s`:
+```
+    match_offset = position_base[s] + read_bits(extra_bits[s]) + 1
+```
+`read_bits(n)` reads bits MSB-first.
 
-#### 8.1.4 Model Size Constraints
+Slot indices outside `[0, 41]` SHALL cause decoder failure.
+
+### 8.2 Fixed-Length Matches (Selectors 4 and 5)
+Selectors `4` and `5` encode fixed-length matches.
+Offset decoding is identical for both selectors.
+
+#### 8.2.1 Selector 4 — 3-Byte Match
+1. Decode `sym` from `model4`
+2. Compute `match_offset` using Section 8.1
+3. Set:
+```
+    match_length = 3
+```
+#### 8.2.2 Selector 5 — 4-Byte Match
+1. Decode `sym` from `model5`
+2. Compute `match_offset` using Section 8.1
+3. Set:
+```
+    match_length = 4
+```
+#### 8.2.3 Model Size Constraints
 The number of entries in:
+
 - `model4`
 - `model5`
 
-depends on:
+SHALL be:
 ```
-    min(window_bits × 2, limit)
+    min(window_bits * 2, limit)
 ```
 Where:
-- `limit = 24` for Model4
-- `limit = 36` for Model5
 
-Implementations MUST ensure symbol indices remain within model entry bounds.
+- `limit = 24` for `model4`
+- `limit = 36` for `model5`
 
-#### 8.1.5 Constraints
-- `match_offset` MUST reference previously decoded bytes.
-- Offset MUST NOT exceed window size.
-- Overlapping copies are valid and required.
-- Match MUST NOT cross frame boundary.
+Symbol indices MUST remain within model bounds.
 
-#### 8.1.6 Rationale
-Fixed-length matches provide efficient encoding for very common short repetitions (3–4 bytes), avoiding the additional length-model overhead required by selector 6.
+### 8.3 Variable-Length Match (Selector 6)
+Selector value `6` encodes a variable-length match.
 
-This is a performance optimization for short back-references, analogous to small-length biasing in LZ-family compressors.
-
-### 8.2 Variable-Length Match Encoding (Selector 6)
-Selector value `6` indicates a variable-length match.
 A variable-length match encodes:
-1. Match length (via Model6len)
-2. Match offset (via Model6 + position slot)
 
-#### 8.2.1 Length Slot Decoding
-The decoder performs:
-1. Decode `sym` from `model6len`
-2. Read `length_extra[sym]` additional bits
-3. Compute:
+1. Match length
+2. Match offset
+
+#### 8.3.1 Length Slot Tables
+Length slots use:
+- `length_base[27]`
+- `length_extra[27]`
+
+These SHALL be generated exactly as:
 ```
-match_length = length_base[sym] + extra + 5
+    unsigned int i, offset = 0;
+    for (i = 0; i < 26; i++) 
+    { 
+        length_base[i] = offset; 
+        length_extra[i] = ((i < 2) ? 0 : (i - 2)) >> 2; 
+        offset += 1U << length_extra[i]; 
+    }
+    length_base[26] = 254; length_extra[26] = 0;
 ```
-The constant `+5` is mandatory and part of the Quantum format.
+For decoded slot `l`:
+```
+    match_length = length_base[l] + read_bits(length_extra[l]) + 5
+```
+The `+5` constant is mandatory.
 
-#### 8.2.2 Length Tables
+Slot indices outside `[0, 26]` SHALL cause decoder failure.
 
-| Index | Base | Extra Bits |
-|-------|------|------------|
-| 0     | 0    | 0 |
-| 1     | 1    | 0 |
-| 2     | 2    | 0 |
-| 3     | 3    | 0 |
-| 4     | 4    | 0 |
-| 5     | 5    | 0 |
-| 6     | 6    | 1 |
-| 7     | 8    | 1 |
-| 8     | 10   | 1 |
-| 9     | 12   | 1 |
-| 10    | 14   | 2 |
-| 11    | 18   | 2 |
-| 12    | 22   | 2 |
-| 13    | 26   | 2 |
-| 14    | 30   | 3 |
-| 15    | 38   | 3 |
-| 16    | 46   | 3 |
-| 17    | 54   | 3 |
-| 18    | 62   | 4 |
-| 19    | 78   | 4 |
-| 20    | 94   | 4 |
-| 21    | 110  | 4 |
-| 22    | 126  | 5 |
-| 23    | 158  | 5 |
-| 24    | 190  | 5 |
-| 25    | 222  | 5 |
-| 26    | 254  | 0 |
-
-#### 8.2.3 Offset Decoding
+#### 8.3.2 Offset Decoding
 After length is determined:
 1. Decode `sym` from `model6`
-2. Read `extra_bits[sym]`
-3. Compute:
+2. Compute `match_offset` using Section 8.1
+
+### 8.4 Match Copy Semantics
+For all match types:
+- `match_offset` MUST be ≥ 1
+- `match_offset` MUST NOT exceed bytes already produced in the frame
+- `match_length` MUST NOT exceed remaining bytes in frame
+- Matches MUST NOT cross frame boundaries
+
+Overlapping copies are valid and MUST behave identically to:
 ```
-    match_offset = position_base[sym] + extra + 1
+    memmove(destination, source, match_length)
 ```
-#### 8.2.4 Constraints
-
-- `match_length` MUST NOT exceed remaining bytes in current frame.
-- `match_offset` MUST be within the sliding window.
-- Overlapping copies are permitted and required to behave like `memmove()`.
-
-#### 8.2.5 Rationale
-The two-stage structure (length first, then offset) improves compression efficiency for long matches while maintaining arithmetic coding adaptivity.
-
-This design is conceptually similar to LZ77 with length/offset coding, but differs from DEFLATE in that it uses adaptive arithmetic models instead of static or dynamic Huffman trees.
+Decoder MUST abort if any constraint is violated.
 
 ## 9. Copy Semantics
 ### 9.1 Standard (Non-Wrapping) Match Copy
@@ -393,15 +398,23 @@ If match crosses window end:
 2. Flush window to output.
 3. Continue at window start.
 
-## 10. Frame Behavior
-Each frame is 32 KiB each.
+## 10. Frame Boundaries
+Compressed data is divided into independent 32 KiB frames.
 
-After frame completion:
-1. Bitstream is aligned to next byte.
-2. Bytes are consumed until `0xFF` marker.
-3. Arithmetic state resets.
+At the end of each frame:
+1. The arithmetic decoder SHALL be renormalized until no further
+   MSB match or E3 condition applies.
+2. The decoder SHALL advance to the next byte boundary.
+   Any padding bits between the final arithmetic bit and the
+   next byte boundary MUST be zero.
+3. A single byte value 0xFF SHALL follow as a frame marker.
 
-CAB-specific behavior allows 0–4 trailing zero bytes before marker.
+The marker byte is byte-aligned and SHALL be consumed.
+
+Exactly one marker SHALL appear per frame.
+
+If a non-zero padding bit is encountered, or if the marker byte
+is not 0xFF, the decoder MUST signal an error.
 
 ## 11. Arithmetic Model Initialization
 Quantum uses multiple adaptive arithmetic models.  
@@ -503,44 +516,57 @@ Implementations MUST ensure:
 Failure to maintain monotonic cumulative ordering results in undefined decoding behavior.
 
 ## 12. Error Conditions
-Decoder returns error if:
-- Invalid selector (>6)
-- Offset exceeds window
-- Frame alignment overshoots
-- Output write fails
 
-## 13. Differences from DEFLATE
+A decoder MUST immediately abort with an error if any of the
+following occur:
 
-| Feature | Quantum | DEFLATE |
-|----------|----------|----------|
-| Entropy coding | Adaptive arithmetic | Huffman |
-| Block framing | Fixed 32 KiB | Variable blocks |
-| Offset encoding | Position slots | Direct Huffman |
-| Adaptivity | Continuous | Per-block |
+Arithmetic violations:
+- C < L
+- C > H
+- Total frequency equals zero
+- Cumulative frequencies are not strictly descending
 
-## 14. Security Considerations
+Match violations:
+- Offset == 0
+- Offset > number of bytes already produced in frame
+- Match extends beyond frame boundary
 
-Implementations must:
+Selector violations:
+- Undefined symbol selector
+- Position slot outside defined table range
 
-- Validate match offsets.
-- Prevent integer overflow in range calculations.
-- Enforce window boundaries.
-- Protect against malformed frame markers.
+Framing violations:
+- Non-zero padding bits before byte alignment
+- Missing or incorrect frame marker
 
-Arithmetic decoding requires careful renormalization logic.
+Silent recovery or continued decoding after these conditions
+is NOT permitted.
 
-## 15. Implementation Notes
+## 13. Security Considerations
+
+Malformed input may attempt to:
+
+- Trigger arithmetic underflow
+- Cause invalid offset references
+- Overflow frequency counters
+- Induce excessive rescale operations
+
+Implementations MUST validate all invariants and abort on violation.
+
+All arithmetic SHALL use bounded integer types with defined overflow behavior.
+
+## 14. Implementation Notes
 - Window size must be power of two.
 - Circular indexing should use masking.
 - Model updates must preserve stable ordering.
 - Copy operations must support overlap.
 
-## 16. References
+## 15. References
 - [Stuart Caie](https://github.com/kyz), [libmspack](https://github.com/kyz/libmspack) source code
 - Matthew Russotto, Quantum compression research [notes](http://www.russotto.net/quantumcomp.html)
 - Microsoft Cabinet file format documentation
 
-## 17. Status
+## 16. Status
 This document describes behavior observed in `libmspack` Quantum decompressor. It is suitable for clean-room reimplementation.
 
 Community review and corrections are encouraged.

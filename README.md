@@ -1,5 +1,7 @@
 # formatdb
 
+> [!NOTE]
+> This repository wasn't meant to be cloned, as it is very heavy
 
 ## Formats
 |Name|Specs|Revision|Source|Description|
@@ -12,5 +14,6 @@
 |PKZIP|[PKZIP.txt](./PKZIP.txt)|6.3.10|[Link](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)|ZIP archive standard originally developed by Phil Katz|
 |WEBP|[rfc9649.pdf](./rfc9649.pdf)|9649|[Link](https://datatracker.ietf.org/doc/rfc9649/)|A modern image format developed by Google with efficient compression, support for animation and transparency|
 |PNG|[PNG.pdf](./PNG.pdf)|3.0|[Link](https://w3.org/TR/png-3)|A lossless raster image format supports high-quality graphics and transparency|
-|JPEG|[itu-t81.pff](./itu-t81.pdf)|1.0|[Link]https://www.w3.org/Graphics/JPEG/itu-t81.pdf)|(A high-ratio compression lossy raster image file format for web and everyday photography|
+|JPEG|[itu-t81.pdf](./itu-t81.pdf)|1.0|[Link](https://www.w3.org/Graphics/JPEG/itu-t81.pdf)|(A high-ratio compression lossy raster image file format for web and everyday photography|
 |AATLS|[AATLS.md](./AATLS.md)|1.0|Unofficial|A texture atlas format used in Mindustry's game engine|
+|H.264|[H264.pdf](./H264.pdf)|15.0|[Link](https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-H.264-202408-I!!PDF-E&type=items)|A video compression standard by the ITU and ISO/IEC that provides high-quality video at low bitrates.|

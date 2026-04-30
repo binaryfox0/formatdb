@@ -17,3 +17,4 @@
 |JPEG|[itu-t81.pdf](./itu-t81.pdf)|1.0|[Link](https://www.w3.org/Graphics/JPEG/itu-t81.pdf)|(A high-ratio compression lossy raster image file format for web and everyday photography|
 |AATLS|[AATLS.md](./AATLS.md)|1.0|Unofficial|A texture atlas format used in Mindustry's game engine|
 |H.264|[H264.pdf](./H264.pdf)|15.0|[Link](https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-H.264-202408-I!!PDF-E&type=items)|A video compression standard by the ITU and ISO/IEC that provides high-quality video at low bitrates.|
+|DWARF5|[DWARF5.pdf](./DWARF5.pdf)|5.0|[Link](https://dwarfstd.org/doc/DWARF5.pdf)|A debugging information format that stores metadata in binaries to map machine code back to source code.|
